@@ -8,6 +8,14 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from torneo.torneo import Torneo
 from torneo.reloj import Reloj, formato_mmss
 from torneo import municipios
+import customtkinter as ctk
+import sys, os
+from torneo.torneo import Torneo
+from torneo.reloj import Reloj, formato_mmss
+from torneo import municipios
+from torneo.tabla import tabla_posiciones
+from torneo.persistencia import conectar, guardar, cargar
+
 
 
 # ============================================================
@@ -195,7 +203,7 @@ class PantallaRadicacion(ctk.CTkFrame):
             return
         equipo_oficial = municipios.canonico(equipo)
         if equipo_oficial is None:
-            self._estado(f"'{equipo}' no es un municipio válido. Elige uno de la lista.", "tomato")
+            self._estado(f"'{equipo}' no es un municipio válido. Elegí uno de la lista.", "tomato")
             return
         try:
             self.app.torneo.radicar_frente(nombre, equipo_oficial, self.gallos_pendientes)
@@ -236,7 +244,7 @@ class PantallaRadicacion(ctk.CTkFrame):
 # ============================================================
 
 class PantallaPeleas(ctk.CTkFrame):
-    DURACION = 300   # segundos por pelea (configurable después)
+    DURACION = 600  # segundos por pelea (configurable después)
 
     def __init__(self, parent, app):
         super().__init__(parent)
@@ -401,8 +409,48 @@ class PantallaTabla(ctk.CTkFrame):
     def __init__(self, parent, app):
         super().__init__(parent)
         self.app = app
-        ctk.CTkLabel(self, text="TABLA DE POSICIONES", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=40)
-        ctk.CTkLabel(self, text="(Aquí irá la tabla con puntos)").pack()
+
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=(15, 5))
+        ctk.CTkLabel(header, text="Tabla de posiciones",
+                     font=ctk.CTkFont(size=22, weight="bold")).pack(side="left")
+        ctk.CTkButton(header, text="Refrescar", width=110,
+                      command=self.refrescar).pack(side="right")
+
+        self.cabecera = ctk.CTkFrame(self)
+        self.cabecera.pack(fill="x", padx=20, pady=(10, 0))
+        cols = [("#", 40), ("Gallo", 130), ("Frente", 180), ("Equipo", 130),
+                ("PJ", 50), ("G", 50), ("E", 50), ("P", 50), ("Pts", 60)]
+        for texto, ancho in cols:
+            ctk.CTkLabel(self.cabecera, text=texto, width=ancho,
+                         font=ctk.CTkFont(weight="bold")).pack(side="left", padx=2)
+
+        self.lista = ctk.CTkScrollableFrame(self)
+        self.lista.pack(fill="both", expand=True, padx=20, pady=10)
+
+        self.lbl_vacio = ctk.CTkLabel(
+            self, text="Aún no hay gallos. Radicá frentes y jugá rondas.",
+            text_color="gray")
+
+    def refrescar(self):
+        for w in self.lista.winfo_children():
+            w.destroy()
+        self.lbl_vacio.pack_forget()
+
+        gallos = self.app.torneo.todos_los_gallos() if self.app.torneo else []
+        if not gallos:
+            self.lbl_vacio.pack(pady=20)
+            return
+
+        anchos = [40, 130, 180, 130, 50, 50, 50, 50, 60]
+        for i, g in enumerate(tabla_posiciones(gallos), start=1):
+            fila = ctk.CTkFrame(self.lista, fg_color=("gray85", "gray20") if i % 2 else "transparent")
+            fila.pack(fill="x", pady=1)
+            valores = [str(i), g.nombre, g.frente, g.equipo,
+                       str(g.peleas), str(g.ganadas), str(g.empatadas),
+                       str(g.perdidas), str(g.puntos)]
+            for texto, ancho in zip(valores, anchos):
+                ctk.CTkLabel(fila, text=texto, width=ancho).pack(side="left", padx=2, pady=4)
 
 
 # ============================================================
@@ -417,7 +465,9 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("green")
 
-        self.torneo = None   # se crea desde la pantalla de radicación
+        self.torneo = None
+        self.db_path = "torneo.db"
+        self._cargar_si_existe()   # se crea desde la pantalla de radicación
 
         # ---- Navegación ----
         self.nav = ctk.CTkFrame(self, width=180)
@@ -429,6 +479,14 @@ class App(ctk.CTk):
                                ("Peleas", self.mostrar_peleas),
                                ("Tabla", self.mostrar_tabla)]:
             ctk.CTkButton(self.nav, text=texto, command=comando, height=40).pack(fill="x", padx=10, pady=5)
+
+        # Botón guardar abajo
+        ctk.CTkButton(self.nav, text="💾 Guardar", height=40,
+                      command=self.guardar_ahora,
+                      fg_color="gray30", hover_color="gray40").pack(side="bottom", fill="x", padx=10, pady=10)
+
+        # Auto-guardar al cerrar la ventana
+        self.protocol("WM_DELETE_WINDOW", self.al_cerrar)
 
         # ---- Contenido ----
         self.contenido = ctk.CTkFrame(self)
@@ -442,15 +500,62 @@ class App(ctk.CTk):
         self.pantalla_actual = None
         self.mostrar_radicacion()
 
+        # Si se cargó un torneo desde la base, sincronizar la pantalla
+        if self.torneo:
+            pr = self.pantallas["radicacion"]
+            pr.entry_gpf.insert(0, str(self.torneo.gallos_por_frente))
+            pr.entry_gpf.configure(state="disabled")
+            pr.btn_crear.configure(state="disabled")
+            pr.lbl_torneo.configure(
+                text=f"Torneo activo · {self.torneo.gallos_por_frente} gallos por frente",
+                text_color="white")
+            pr._set_form_enabled(True)
+            pr._refrescar_frentes()
+            pr._actualizar_contador()
+
     def _mostrar(self, nombre):
         if self.pantalla_actual:
             self.pantalla_actual.pack_forget()
         self.pantalla_actual = self.pantallas[nombre]
         self.pantalla_actual.pack(fill="both", expand=True)
+        if nombre == "tabla":
+            self.pantalla_actual.refrescar()
 
     def mostrar_radicacion(self): self._mostrar("radicacion")
     def mostrar_peleas(self):     self._mostrar("peleas")
     def mostrar_tabla(self):      self._mostrar("tabla")
+
+    # -------- persistencia --------
+    def _cargar_si_existe(self):
+        if not os.path.exists(self.db_path):
+            return
+        try:
+            con = conectar(self.db_path)
+            # leemos gallos_por_frente del 1er frente (todos lo cumplen)
+            row = con.execute("SELECT COUNT(*) FROM gallos g "
+                              "JOIN frentes f ON g.frente=f.radicado "
+                              "GROUP BY f.radicado LIMIT 1").fetchone()
+            gpf = row[0] if row else 1
+            self.torneo = cargar(con, gpf)
+            con.close()
+        except Exception as e:
+            print("No se pudo cargar:", e)
+
+    def guardar_ahora(self):
+        if not self.torneo:
+            return False
+        try:
+            con = conectar(self.db_path)
+            guardar(con, self.torneo)
+            con.close()
+            return True
+        except Exception as e:
+            print("Error guardando:", e)
+            return False
+
+    def al_cerrar(self):
+        self.guardar_ahora()
+        self.destroy()
 
 
 if __name__ == "__main__":
