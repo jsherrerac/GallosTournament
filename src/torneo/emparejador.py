@@ -56,4 +56,3 @@ def emparejar_optimo(gallos, ronda):
                 G.add_edge(a.id, b.id)
     por_id = {g.id: g for g in gallos}
     return [Pelea(por_id[x], por_id[y], ronda) for x, y in nx.max_weight_matching(G, maxcardinality=True)] 
-    
