@@ -28,6 +28,7 @@ class Gallo:
 class Frente:
     nombre: str
     equipo: str
+    radicado: str = ""
     gallos: list[Gallo]= field(default_factory=list)
     id: str= field(default_factory=_nuevo_id)
 
@@ -40,7 +41,7 @@ class Frente:
 class Pelea:
     gallo_a: Gallo
     gallo_b: Gallo
-    ronta: int=1
+    ronda: int=1
     ganador: Gallo | None = None
     finalizada: bool=False
     id: str=field(default_factory=_nuevo_id)

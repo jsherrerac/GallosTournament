@@ -51,7 +51,7 @@ def emparejar_optimo(gallos, ronda):
     G= nx.Graph()
     G.add_nodes_from(g.id for g in gallos)
     for i, a in enumerate(gallos):
-        for b in gallos[i+1]:
+        for b in gallos[i+1:]:
             if son_compatibles(a,b):
                 G.add_edge(a.id, b.id)
     por_id = {g.id: g for g in gallos}
